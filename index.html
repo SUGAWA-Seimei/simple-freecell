@@ -2,6 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>フリーセル</title>
   <style>
     body {
@@ -12,9 +13,6 @@
       display: flex;
       justify-content: space-between;
     }
-    button{
-      font-size:"2em";
-    }
     canvas {
       display: block;
     }
@@ -22,8 +20,8 @@
 </head>
 <body onload="init()">
   <div id="controls">
-    <button style="font-size:2em;" onclick="newGame()">新規ゲーム</button>
-    <button style="font-size:2em;" onclick="undo()">一手戻す</button>
+    <button onclick="newGame()">新規ゲーム</button>
+    <button onclick="undo()">一手戻す</button>
   </div>
   <canvas id="gameCanvas"></canvas>
 
@@ -58,7 +56,7 @@
     // カードサイズと余白
     let cardWidth = 0;
     let cardHeight = 0;
-    let padding = 10;
+    let padding = 1;
 
     // セルの位置
     let freeCells = [];
@@ -424,16 +422,18 @@
       // ホームセルの中で一番低い値を探す
       let minIndex = Infinity;
       for (const card of homeCellContents) {
-        if (card) {
-          const idx = order.indexOf(card.value);
-          if (idx !== -1 && idx < minIndex) {
+        if (card.length) {
+          const idx = order.indexOf(card[card.length-1].value);
+          if (idx < minIndex) {
             minIndex = idx;
           }
+        }else{
+            minIndex = -1;
         }
       }
 
       // まだ何も置かれてない場合は -1 → A〜2まで許可
-      const maxAllowedIndex = minIndex === Infinity ? 1 : minIndex + 2;
+      const maxAllowedIndex = minIndex + 2;
 
       let moved = false;
 
@@ -517,17 +517,13 @@
 
       if (canvas.width > canvas.height * 1.45) {
         // 横長 → フリーセルとホームセルを縦に配置
-        const spacing = (canvas.height - 2 * padding - 4 * cardHeight) / 3;
-        for (let i = 0; i < 4; i++) {
-          let y = padding + i * (cardHeight + spacing);
-          freeCells.push({ x: padding, y: y });
-          homeCells.push({ x: canvas.width - cardWidth - padding, y: y });
-        }
+
 
         // 場札の配置（横に等間隔）
+        const tableauSpacingX = (canvas.width - 10 * cardWidth) / 11;
+        padding = Math.min(tableauSpacingX,(canvas.height -cardHeight * 4)/8);
         const leftX = padding + cardWidth;
         const rightX = canvas.width - padding - cardWidth;
-        const tableauSpacingX = (rightX - leftX - 8 * cardWidth) / 9;
         const tableauY = padding;
 
         for (let i = 0; i < 8; i++) {
@@ -535,26 +531,35 @@
           tableaus.push({ x: x, y: tableauY });
         }
 
+        //フリーセルとホームセルの位置
+        const spacing = (canvas.height - 2 * padding - 4 * cardHeight) / 3;
+        for (let i = 0; i < 4; i++) {
+          let y = padding + i * (cardHeight + spacing);
+          freeCells.push({ x: padding, y: y });
+          homeCells.push({ x: canvas.width - cardWidth - padding, y: y });
+        }
+
         // カードの重なり間隔（縦）
         tableauSpacingY = (canvas.height - 2 * padding - cardHeight) / 17;
       } else {
         // 縦長 → フリーセルとホームセルを横に配置
-        const spacing = cardWidth * 0.05;
-        for (let i = 0; i < 4; i++) {
-          let xFree = padding * 2 + i * (cardWidth + spacing);
-          let xHome = canvas.width - (padding * 2 + (4 - i) * (cardWidth + spacing)) + spacing;
-          freeCells.push({ x: xFree, y: padding });
-          homeCells.push({ x: xHome, y: padding });
-        }
 
         // 場札の配置（横に等間隔）
-        const tableauY = padding + cardHeight + cardWidth / 10;
-        const availableWidth = canvas.width - 2 * padding;
-        const tableauSpacingX = (availableWidth - 8 * cardWidth) / 9;
-
+        padding = Math.min((canvas.width - 8 * cardWidth) / 9, canvas.height - (cardHeight * 4.95));
+        const tableauSpacingX = (canvas.width - padding * 2 - 8 * cardWidth) / 7;
+        const tableauY = padding * 2 + cardHeight;
         for (let i = 0; i < 8; i++) {
-          let x = padding + tableauSpacingX + i * (cardWidth + tableauSpacingX);
+          let x = padding + i * (cardWidth + tableauSpacingX);
           tableaus.push({ x: x, y: tableauY });
+        }
+       
+        //フリーセルとホームセルの位置
+        const spacing = cardWidth * 0.05;
+        for (let i = 0; i < 4; i++) {
+          let xFree = padding  + i * (cardWidth + spacing);
+          let xHome = canvas.width + spacing - (padding  + (i+1) * (cardWidth + spacing)) ;
+          freeCells.push({ x: xFree, y: padding });
+          homeCells.push({ x: xHome, y: padding });
         }
 
         // カードの重なり間隔（縦）
