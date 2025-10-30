@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>フリーセル</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+    }
+    #controls {
+      display: flex;
+      justify-content: space-between;
+    }
+    button{
+      font-size:"2em";
+    }
+    canvas {
+      display: block;
+    }
+  </style>
+</head>
+<body onload="init()">
+  <div id="controls">
+    <button style="font-size:2em;" onclick="newGame()">新規ゲーム</button>
+    <button style="font-size:2em;" onclick="undo()">一手戻す</button>
+  </div>
+  <canvas id="gameCanvas"></canvas>
+
+  <script>
+    // 🎨 グローバルカラー設定
+    const bgColor = "#0b6623";         // 背景色（深緑）
+    const borderColor = "#000000";     // 枠線（黒）
+    const cardBackColor = "#cccccc";   // カード背面（グレー）
+    const cardFrontColor = "#ffffff";  // カード表面（白）
+    const blackTextColor = "#000000";  // 黒文字
+    const redTextColor = "#ff0000";    // 赤文字
+
+    //キャンバス
+    let canvas, ctx;
+
+    //数字
+    const order = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+
+    //ドラッグ判定
+    let dragging = false;
+    let dragCards = [];
+    let dragOrigin = null;
+    let dragOffsetX = 0;
+    let dragOffsetY = 0;
+    let dragX = 0;
+    let dragY = 0;
+
+
+    //移動履歴
+    let moveHistory = [];
+
+    // カードサイズと余白
+    let cardWidth = 0;
+    let cardHeight = 0;
+    let padding = 10;
+
+    // セルの位置
+    let freeCells = [];
+    let homeCells = [];
+
+
+    let freeCellContents = [[], [], [], []];
+    let homeCellContents = [[], [], [], []];
+    let tableauContents = [];
+
+    //場札の位置
+    let tableaus = [];
+    let tableauSpacingY = 0;
+    let fontSize;
+//---------------イニシャル-----------------------
+
+    function init() {
+      canvas = document.getElementById("gameCanvas");
+      ctx = canvas.getContext("2d");
+
+      canvas.addEventListener("mousedown", startDrag);
+      canvas.addEventListener("mousemove", dragMove);
+      canvas.addEventListener("mouseup", endDrag);
+      canvas.addEventListener("mouseleave", endDrag);
+
+      canvas.addEventListener("touchstart", startDrag);
+      canvas.addEventListener("touchmove", e => {
+        e.preventDefault();
+        dragMove(e)});
+      canvas.addEventListener("touchend", endDrag);
+      canvas.addEventListener("touchcancel", endDrag);
+
+      resizeCanvas();
+      window.addEventListener("resize", resizeCanvas);
+
+      if(load_game()==false){newGame();}
+    }
+
+
+
+    //カードのオブジェクト生成
+    function createCard(suit, value) {
+      const isRed = suit === "♥" || suit === "♦";
+      return {
+        suit: suit,
+        value: value,
+        text: `${suit}${value}`,
+        color: isRed ? redTextColor : blackTextColor
+      };
+    }
+
+
+
+//-----------新規ゲーム---------------------------------------------
+
+    function newGame() {
+
+      if(tableauContents.filter(a=>a.length>0).length){if(confirm("新規ゲームを開始しますか？","新規ゲーム")==false){return;}};
+      console.log("新規ゲーム開始！");
+
+      // セル初期化
+      freeCellContents = [[], [], [], []];
+      homeCellContents = [[], [], [], []];
+      tableauContents = [];
+
+      // デッキ生成＆配布
+      const deck = generateDeck();
+      for (let i = 0; i < 8; i++) {
+        tableauContents.push([]);
+      }
+      for (let i = 0; i < deck.length; i++) {
+        tableauContents[i % 8].push(deck[i]);
+      }
+
+      // 履歴リセット
+      moveHistory = [];
+
+      save_game();
+
+      drawBackground();
+      drawCells();
+
+    }
+
+    //カードのオブジェクトを作ってシャッフル
+    function generateDeck() {
+      const suits = ["♠", "♥", "♦", "♣"];
+      const values = order;
+      const deck = [];
+
+      for (const suit of suits) {
+        for (const value of values) {
+          deck.push(createCard(suit, value));
+        }
+      }
+
+      // シャッフル
+      for (let i = deck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [deck[i], deck[j]] = [deck[j], deck[i]];
+      }
+
+      return deck;
+    }
+
+//-----------------ドラッグ--------------------------------------
+
+    function startDrag(e) {
+
+      let x;
+      let y;
+
+      if(dragging){endDrag(e);}
+
+      if('offsetX' in e){
+        x = e.offsetX;
+        y = e.offsetY;
+      }else{
+        x = event.touches[0].pageX; - gameCanvas.getBoundingClientRect().left;
+        y = event.touches[0].pageY - gameCanvas.getBoundingClientRect().top;  
+      }
+
+      // フリーセル判定
+      for (let i = 0; i < freeCells.length; i++) {
+        const cell = freeCells[i];
+        const card = freeCellContents[i];
+        if (card.length &&
+            x >= cell.x && x <= cell.x + cardWidth &&
+            y >= cell.y && y <= cell.y + cardHeight) {
+          dragging = true;
+          dragCards = card.slice(0);
+          dragOrigin = { type: "free", index: i };
+          dragOffsetX = x - cell.x;
+          dragOffsetY = y - cell.y;
+          dragX = x;
+          dragY = y;
+          freeCellContents[i] = []; // 一時的に消す
+          drawBackground();
+          drawCells();
+          return;
+        }
+      }
+
+      //場札判定
+      for (let i = 0; i < tableaus.length; i++) {
+
+        const pile = tableaus[i];
+        const cards = tableauContents[i];
+        for (let j = cards.length - 1; j >= 0; j--) {
+          const cardX = pile.x;
+          const cardY = pile.y + j * tableauSpacingY;
+          if (x >= cardX && x <= cardX + cardWidth &&
+              y >= cardY && y <= cardY + cardHeight) {
+            dragging = true;
+            dragCards = cards.slice(j);
+            dragOrigin = { type: "tableau", index: i, start: j };
+            dragOffsetX = x - cardX;
+            dragOffsetY = y - cardY;
+            dragX = x;
+            dragY = y;
+
+            // 元の束からカードを一時的に除去
+            tableauContents[i] = cards.slice(0, j);
+            drawBackground();
+            drawCells();
+            return;
+          }
+        }
+      }
+    }
+
+
+    function dragMove(e) {
+      if (!dragging) return;
+
+      let x;
+      let y;
+
+      if('offsetX' in e){
+        x = e.offsetX;
+        y = e.offsetY;
+      }else{
+        x = event.touches[0].pageX; - gameCanvas.getBoundingClientRect().left;
+        y = event.touches[0].pageY - gameCanvas.getBoundingClientRect().top;  
+      }
+
+      dragX = x;
+      dragY = y;
+
+      // 再描画（背景＋通常＋ドラッグ中）
+      drawBackground();
+      drawCells();
+
+
+    }
+
+    function endDrag(e) {
+      if (!dragging) return;
+
+      let x = dragX;
+      let y = dragY;
+
+      // ドロップ先判定
+      let target = null;
+
+      // フリーセル判定
+      for (let i = 0; i < freeCells.length; i++) {
+        const cell = freeCells[i];
+        if (isOverlapping(x, y, cell)) {
+          target = { type: "free", index: i };
+          break;
+        }
+      }
+
+      // ホームセル判定
+      if (!target) {
+        for (let i = 0; i < homeCells.length; i++) {
+          const cell = homeCells[i];
+          if (isOverlapping(x, y, cell)) {
+            target = { type: "home", index: i };
+            break;
+          }
+        }
+      }
+
+      // 場札判定
+      if (!target) {
+        for (let i = 0; i < tableaus.length; i++) {
+          const pile = tableaus[i];
+          const cards = tableauContents[i];
+          const topY = pile.y + (cards.length > 0 ? (cards.length - 1) * tableauSpacingY : 0);
+          if (isOverlapping(x, y, { x: pile.x, y: topY })) {
+            target = { type: "tableau", index: i};
+            break;
+          }
+        }
+      }
+
+      // 移動判定
+      if (target && canDrop(dragCards, target) && isValidSequence(dragCards) && (dragOrigin.type != target.type || dragOrigin.index != target.index)) {
+        applyMove(dragCards, dragOrigin, target);
+      }else{
+        // 元に戻す
+        if (dragOrigin.type === "tableau") {
+          tableauContents[dragOrigin.index].push(...dragCards);
+        } else if (dragOrigin.type === "free") {
+          freeCellContents[dragOrigin.index].push(...dragCards);
+        } else if (dragOrigin.type === "home") {
+          homeCellContents[dragOrigin.index].push(...dragCards);
+        }
+      }
+
+      // リセット
+      dragging = false;
+      dragCards = [];
+      dragOrigin = null;
+      drawBackground();
+      drawCells();
+
+      autoSendToHome();
+    }
+//---------------------------------------------------------
+
+
+    function isOverlapping(x, y, cell) {
+      const overlapX = x >= cell.x && x <= cell.x + cardWidth;
+      const overlapY = y >= cell.y && y <= cell.y + cardHeight;
+      const overlapArea = overlapX && overlapY;
+      return overlapArea;
+    }
+
+
+//-------------------移動判定--------------------
+    //移動可能か
+    function canDrop(cards, target) {
+      const card = cards[0];
+
+      if (target.type === "free") {
+        return freeCellContents[target.index].length==0;
+      }
+
+      if (target.type === "home") {
+        const top = homeCellContents[target.index];
+        if (top.length==0) {
+          return card.value === "A";
+        } else {
+          topCard = top[top.length-1];
+          return card.suit === topCard.suit && isNextValue(topCard.value, card.value);
+        }
+      }
+
+      if (target.type === "tableau") {
+        const pile = tableauContents[target.index];
+        if (pile.length === 0) return true;
+
+        const top = pile[pile.length - 1];
+        const colorDiff = card.color !== top.color;
+        const valueMatch = isPrevValue(card.value, top.value);
+        return colorDiff && valueMatch;
+      }
+
+      return false;
+    }
+
+    function isNextValue(a, b) {
+      return order.indexOf(b) === order.indexOf(a) + 1;
+    }
+
+    function isPrevValue(a, b) {
+      return order.indexOf(a) === order.indexOf(b) - 1;
+    }
+
+
+    function applyMove(cards, origin, target) {
+
+      // 履歴に記録
+      moveHistory.push({
+        cards: [...cards],
+        from: origin,
+        to: target
+      });
+
+      // 移動先に追加
+      if (target.type === "tableau") {
+        tableauContents[target.index].push(...cards);
+      } else if (target.type === "free") {
+        freeCellContents[target.index].push(...cards);
+      } else if (target.type === "home") {
+        homeCellContents[target.index].push(...cards);
+      }
+
+      save_game();
+    }
+
+    function isValidSequence(cards) {
+      if (cards.length === 0) return false;
+
+      // 色違いで1つずつ降順かチェック
+      for (let i = 0; i < cards.length - 1; i++) {
+        const upper = cards[i];
+        const lower = cards[i + 1];
+
+        const colorDiff = upper.color !== lower.color;
+        const valueStep = isPrevValue(lower.value, upper.value);
+
+        if (!colorDiff || !valueStep) {
+          return false;
+        }
+      }
+
+      // 移動可能な最大数を計算
+      const free = freeCellContents.filter(c => c.length==0).length;
+      //const emptyTableaus = tableauContents.filter(pile => pile.length === 0).length;
+      //const maxMovable = (free + 1) * (emptyTableaus + 1);
+
+      return cards.length <= free+1;
+    }
+
+
+//------------------自動移動-------------------------------------
+    function autoSendToHome() {
+
+      // ホームセルの中で一番低い値を探す
+      let minIndex = Infinity;
+      for (const card of homeCellContents) {
+        if (card) {
+          const idx = order.indexOf(card.value);
+          if (idx !== -1 && idx < minIndex) {
+            minIndex = idx;
+          }
+        }
+      }
+
+      // まだ何も置かれてない場合は -1 → A〜2まで許可
+      const maxAllowedIndex = minIndex === Infinity ? 1 : minIndex + 2;
+
+      let moved = false;
+
+      function canAutoSend(card) {
+        const cardIndex = order.indexOf(card.value);
+        if (cardIndex === -1 || cardIndex > maxAllowedIndex) return false;
+
+        const homeIndex = findHomeCellIndex(card);
+        return canDrop([card], { type: "home", index: homeIndex });
+      }
+
+      // フリーセルチェック
+      for (let i = 0; i < freeCellContents.length; i++) {
+        const card = freeCellContents[i][0];
+        if (card && canAutoSend(card)) {
+          const homeIndex = findHomeCellIndex(card);
+          applyMove(freeCellContents[i].splice(0,1), { type: "free", index: i }, { type: "home", index: homeIndex});
+          moved = true;
+          //return;
+        }
+      }
+
+      // 場札チェック
+      for (let i = 0; i < tableauContents.length; i++) {
+        const pile = tableauContents[i];
+        if (pile.length === 0) continue;
+        const card = pile[pile.length - 1];
+        if (canAutoSend(card)) {
+          const homeIndex = findHomeCellIndex(card);
+          applyMove(pile.splice(pile.length - 1,1), { type: "tableau", index: i, start: pile.length - 1 }, { type: "home", index: homeIndex });
+          //return;
+          moved = true;
+        }
+      }
+
+      drawBackground();
+      drawCells();
+
+      if (moved) {
+        autoSendToHome(); // 再帰的に繰り返す
+      }
+    }
+
+    function findHomeCellIndex(fin) {
+      for (let i = 0; i < homeCellContents.length; i++) {
+        const card = homeCellContents[i];
+
+        if (card.length==0){ if(fin.value=="A") return i;}else{ if(card[0].suit === fin.suit)  return i;}
+      }
+      return 0; // fallback
+    }
+
+//-------------------------描画-------------------------------
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight - document.getElementById("controls").offsetHeight;
+
+      calculateCardSize();
+      layoutCells();
+      drawBackground();
+      drawCells();
+    }
+
+    function calculateCardSize() {
+      if (canvas.width > canvas.height * 6/5) {
+        // 横長
+        cardHeight = canvas.height / 5;
+        cardWidth = cardHeight * 2 / 3;
+      } else {
+        // 縦長 or 正方形寄り
+        cardWidth = canvas.width / 9;
+        cardHeight = cardWidth * 1.5;
+      }
+    }
+
+    function layoutCells() {
+      freeCells = [];
+      homeCells = [];
+      tableaus = [];
+
+      if (canvas.width > canvas.height * 1.45) {
+        // 横長 → フリーセルとホームセルを縦に配置
+        const spacing = (canvas.height - 2 * padding - 4 * cardHeight) / 3;
+        for (let i = 0; i < 4; i++) {
+          let y = padding + i * (cardHeight + spacing);
+          freeCells.push({ x: padding, y: y });
+          homeCells.push({ x: canvas.width - cardWidth - padding, y: y });
+        }
+
+        // 場札の配置（横に等間隔）
+        const leftX = padding + cardWidth;
+        const rightX = canvas.width - padding - cardWidth;
+        const tableauSpacingX = (rightX - leftX - 8 * cardWidth) / 9;
+        const tableauY = padding;
+
+        for (let i = 0; i < 8; i++) {
+          let x = leftX + tableauSpacingX + i * (cardWidth + tableauSpacingX);
+          tableaus.push({ x: x, y: tableauY });
+        }
+
+        // カードの重なり間隔（縦）
+        tableauSpacingY = (canvas.height - 2 * padding - cardHeight) / 17;
+      } else {
+        // 縦長 → フリーセルとホームセルを横に配置
+        const spacing = cardWidth * 0.05;
+        for (let i = 0; i < 4; i++) {
+          let xFree = padding * 2 + i * (cardWidth + spacing);
+          let xHome = canvas.width - (padding * 2 + (4 - i) * (cardWidth + spacing)) + spacing;
+          freeCells.push({ x: xFree, y: padding });
+          homeCells.push({ x: xHome, y: padding });
+        }
+
+        // 場札の配置（横に等間隔）
+        const tableauY = padding + cardHeight + cardWidth / 10;
+        const availableWidth = canvas.width - 2 * padding;
+        const tableauSpacingX = (availableWidth - 8 * cardWidth) / 9;
+
+        for (let i = 0; i < 8; i++) {
+          let x = padding + tableauSpacingX + i * (cardWidth + tableauSpacingX);
+          tableaus.push({ x: x, y: tableauY });
+        }
+
+        // カードの重なり間隔（縦）
+        const availableHeight = canvas.height - tableauY - cardHeight- padding * 2;
+        tableauSpacingY = availableHeight / 17;
+      }
+
+      const maxHeight = cardHeight / 7;
+      const maxWidth = cardWidth * 0.9;
+
+      let testSize = 5;
+      ctx.font = `${testSize}px sans-serif`;
+      let metrics = ctx.measureText("♠Q0");
+
+      while (metrics.width <= maxWidth && (metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent) <= tableauSpacingY*0.95) {
+        testSize++;
+        ctx.font = `${testSize}px sans-serif`;
+        metrics = ctx.measureText("♠Q0");
+      }
+
+      fontSize = testSize-1;
+    }
+
+
+
+    function drawCells() {
+      ctx.strokeStyle = borderColor;
+      ctx.lineWidth = 2;
+
+      // フリーセル
+      for (let i = 0; i < freeCells.length; i++) {
+        const cell = freeCells[i];
+        const card = freeCellContents[i];
+        if (card.length === 0) {
+          drawCard(cell.x,cell.y, null);
+        } else {
+          drawCard(cell.x,cell.y, card[0]);
+        }
+      }
+
+      // ホームセル
+      for (let i = 0; i < homeCells.length; i++) {
+        const cell = homeCells[i];
+        const card = homeCellContents[i];
+        if (card.length === 0) {
+          drawCard(cell.x,cell.y, null);
+        } else {
+          drawCard(cell.x,cell.y, card[card.length-1]);
+        }
+      }
+
+      // 場札
+      for (let i = 0; i < tableaus.length; i++) {
+        const pile = tableaus[i];
+        const cards = tableauContents[i] || [];
+
+        if (cards.length === 0) {
+          drawCard(pile.x, pile.y, null);
+        } else {
+          for (let j = 0; j < cards.length; j++) {
+            const card = cards[j];
+            const y = pile.y + j * tableauSpacingY;
+            drawCard(pile.x, y, card);
+          }
+        }
+      }
+      
+      //ドラッグ中のカード
+      for (let i = 0; i < dragCards.length; i++) {
+        const card = dragCards[i];
+        const drawX = dragX - dragOffsetX;
+        const drawY = dragY - dragOffsetY + i * tableauSpacingY;
+        drawCard(drawX, drawY, card);
+      }
+    }
+
+    //カード自体の描画
+    function drawCard(x, y, card) {
+      if (!card) {
+        // 空のカード枠
+        ctx.fillStyle = bgColor;
+        ctx.fillRect(x, y, cardWidth, cardHeight);
+        ctx.strokeStyle = borderColor;
+        ctx.strokeRect(x, y, cardWidth, cardHeight);
+      } else {
+        ctx.fillStyle = cardFrontColor;
+        ctx.fillRect(x, y, cardWidth, cardHeight);
+        ctx.strokeStyle = borderColor;
+        ctx.strokeRect(x, y, cardWidth, cardHeight);
+
+        ctx.fillStyle = card.color;
+        ctx.font = `${fontSize}px sans-serif`;
+        ctx.textBaseline = "top";
+        ctx.fillText(card.text, x + 4, y + 4);
+      }
+    }
+
+    
+    function drawBackground() {
+      ctx.fillStyle = bgColor;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+
+
+//-------元に戻す------------------------------------------------------
+
+
+    function undo() {
+      console.log("一手戻す！");
+      if (moveHistory.length === 0) return;
+
+      const last = moveHistory.pop();
+      const { cards, from, to } = last;
+
+      // 移動先から削除
+      if (to.type === "tableau") {
+        tableauContents[to.index].splice(-cards.length);
+      } else if (to.type === "free") {
+        freeCellContents[to.index].splice(-cards.length);
+      } else if (to.type === "home") {
+        homeCellContents[to.index].splice(-cards.length);
+      }
+
+      // 元に戻す
+      if (from.type === "tableau") {
+        tableauContents[from.index].push(...cards);
+      } else if (from.type === "free") {
+        freeCellContents[from.index].push(...cards);
+      } else if (from.type === "home") {
+        homeCellContents[from.index].push(...cards);
+      }
+
+      drawBackground();
+      drawCells();
+    }
+
+//----------------保存-読込--------------------
+
+function save_game(){
+	tabe_json = JSON.stringify(tableauContents);
+	home_json = JSON.stringify(homeCellContents);
+	free_json = JSON.stringify(freeCellContents);
+	his_json = JSON.stringify(moveHistory);
+
+	localStorage.setItem("scatolo's_simple-freecel",tabe_json + "/" + home_json + "/" + free_json + "/" + his_json);
+}
+
+function load_game(){
+        g = localStorage.getItem("scatolo's_simple-freecel");
+	if(g==null){
+		return false;
+	}
+
+	og = g.split("/");
+	
+	tableauContents = JSON.parse(og[0]);
+	homeCellContents = JSON.parse(og[1]);
+	freeCellContents = JSON.parse(og[2]);
+	moveHistory = JSON.parse(og[3]);
+        
+        drawBackground();
+        drawCells();
+
+        return true;
+}
+
+
+  </script>
+</body>
+</html>
